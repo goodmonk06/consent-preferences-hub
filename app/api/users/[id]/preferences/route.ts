@@ -1,19 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
+import { updatePreferenceSchema, userIdParamSchema } from '@/lib/validation';
+import {
+  handleError,
+  NotFoundError,
+  validateBody,
+  validateParams,
+} from '@/lib/errors';
 
 type RouteContext = {
   params: Promise<{ id: string }>;
 };
 
-const VALID_CHANNELS = ['email', 'sms', 'push'];
-const VALID_FREQUENCIES = ['none', 'low', 'normal', 'high'];
-
-export async function GET(
-  request: NextRequest,
-  context: RouteContext
-) {
+export async function GET(request: NextRequest, context: RouteContext) {
   try {
-    const { id: userId } = await context.params;
+    const params = await context.params;
+    const { id: userId } = validateParams(params, userIdParamSchema);
 
     // Verify user exists
     const user = await prisma.user.findUnique({
@@ -21,10 +23,7 @@ export async function GET(
     });
 
     if (!user) {
-      return NextResponse.json(
-        { error: 'User not found' },
-        { status: 404 }
-      );
+      throw new NotFoundError('User', userId);
     }
 
     // Get all notification preferences for the user
@@ -35,21 +34,18 @@ export async function GET(
 
     return NextResponse.json({ preferences });
   } catch (error) {
-    console.error('Get preferences error:', error);
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    );
+    return handleError(error);
   }
 }
 
-export async function POST(
-  request: NextRequest,
-  context: RouteContext
-) {
+export async function POST(request: NextRequest, context: RouteContext) {
   try {
-    const { id: userId } = await context.params;
-    const body = await request.json();
+    const params = await context.params;
+    const { id: userId } = validateParams(params, userIdParamSchema);
+    const { channel, frequency, metaJson } = await validateBody(
+      request,
+      updatePreferenceSchema
+    );
 
     // Verify user exists
     const user = await prisma.user.findUnique({
@@ -57,33 +53,7 @@ export async function POST(
     });
 
     if (!user) {
-      return NextResponse.json(
-        { error: 'User not found' },
-        { status: 404 }
-      );
-    }
-
-    const { channel, frequency, metaJson } = body;
-
-    if (!channel || !frequency) {
-      return NextResponse.json(
-        { error: 'channel and frequency are required' },
-        { status: 400 }
-      );
-    }
-
-    if (!VALID_CHANNELS.includes(channel)) {
-      return NextResponse.json(
-        { error: `channel must be one of: ${VALID_CHANNELS.join(', ')}` },
-        { status: 400 }
-      );
-    }
-
-    if (!VALID_FREQUENCIES.includes(frequency)) {
-      return NextResponse.json(
-        { error: `frequency must be one of: ${VALID_FREQUENCIES.join(', ')}` },
-        { status: 400 }
-      );
+      throw new NotFoundError('User', userId);
     }
 
     // Upsert notification preference
@@ -108,10 +78,6 @@ export async function POST(
 
     return NextResponse.json({ preference });
   } catch (error) {
-    console.error('Update preference error:', error);
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    );
+    return handleError(error);
   }
 }

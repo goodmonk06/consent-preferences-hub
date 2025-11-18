@@ -1,16 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
+import { updateConsentSchema, userIdParamSchema } from '@/lib/validation';
+import {
+  handleError,
+  NotFoundError,
+  validateBody,
+  validateParams,
+} from '@/lib/errors';
 
 type RouteContext = {
   params: Promise<{ id: string }>;
 };
 
-export async function GET(
-  request: NextRequest,
-  context: RouteContext
-) {
+export async function GET(request: NextRequest, context: RouteContext) {
   try {
-    const { id: userId } = await context.params;
+    const params = await context.params;
+    const { id: userId } = validateParams(params, userIdParamSchema);
 
     // Verify user exists
     const user = await prisma.user.findUnique({
@@ -18,10 +23,7 @@ export async function GET(
     });
 
     if (!user) {
-      return NextResponse.json(
-        { error: 'User not found' },
-        { status: 404 }
-      );
+      throw new NotFoundError('User', userId);
     }
 
     // Get all consent categories with user's consent status
@@ -31,6 +33,7 @@ export async function GET(
           where: { userId },
         },
       },
+      orderBy: { name: 'asc' },
     });
 
     const consents = categories.map((category) => ({
@@ -44,21 +47,15 @@ export async function GET(
 
     return NextResponse.json({ consents });
   } catch (error) {
-    console.error('Get consents error:', error);
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    );
+    return handleError(error);
   }
 }
 
-export async function POST(
-  request: NextRequest,
-  context: RouteContext
-) {
+export async function POST(request: NextRequest, context: RouteContext) {
   try {
-    const { id: userId } = await context.params;
-    const body = await request.json();
+    const params = await context.params;
+    const { id: userId } = validateParams(params, userIdParamSchema);
+    const { categoryId, status } = await validateBody(request, updateConsentSchema);
 
     // Verify user exists
     const user = await prisma.user.findUnique({
@@ -66,26 +63,7 @@ export async function POST(
     });
 
     if (!user) {
-      return NextResponse.json(
-        { error: 'User not found' },
-        { status: 404 }
-      );
-    }
-
-    const { categoryId, status } = body;
-
-    if (!categoryId || !status) {
-      return NextResponse.json(
-        { error: 'categoryId and status are required' },
-        { status: 400 }
-      );
-    }
-
-    if (status !== 'granted' && status !== 'denied') {
-      return NextResponse.json(
-        { error: 'status must be either "granted" or "denied"' },
-        { status: 400 }
-      );
+      throw new NotFoundError('User', userId);
     }
 
     // Verify category exists
@@ -94,10 +72,7 @@ export async function POST(
     });
 
     if (!category) {
-      return NextResponse.json(
-        { error: 'Consent category not found' },
-        { status: 404 }
-      );
+      throw new NotFoundError('Consent category', categoryId);
     }
 
     // Upsert user consent
@@ -116,14 +91,18 @@ export async function POST(
         categoryId,
         status,
       },
+      include: {
+        category: {
+          select: {
+            key: true,
+            name: true,
+          },
+        },
+      },
     });
 
     return NextResponse.json({ consent });
   } catch (error) {
-    console.error('Update consent error:', error);
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    );
+    return handleError(error);
   }
 }

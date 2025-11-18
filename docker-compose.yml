@@ -18,6 +18,30 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - consent-hub-network
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: consent-hub-app
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: "postgresql://consent_user:consent_password@postgres:5432/consent_hub?schema=public"
+      AUTH_SECRET: "change-me-in-production-to-a-secure-random-string"
+      NODE_ENV: production
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - consent-hub-network
 
 volumes:
   postgres_data:
+
+networks:
+  consent-hub-network:
+    driver: bridge

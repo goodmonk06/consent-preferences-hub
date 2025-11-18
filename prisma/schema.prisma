@@ -1,9 +1,6 @@
 // This is your Prisma schema file,
 // learn more about it in the docs: https://pris.ly/d/prisma-schema
 
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -13,49 +10,227 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// ============================================================================
+// Core User & Identity
+// ============================================================================
+
 model User {
   id        String   @id @default(cuid())
   email     String   @unique
+  firstName String?
+  lastName  String?
+  metadata  Json?    // Flexible field for custom user attributes
   createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  consents               UserConsent[]
+  consents                UserConsent[]
   notificationPreferences NotificationPreference[]
+  auditLogs               ConsentAuditLog[]
+  withdrawalRequests      ConsentWithdrawal[]
+  groupMemberships        UserGroupMembership[]
 
   @@map("users")
 }
 
-model ConsentCategory {
-  id          String   @id @default(cuid())
-  key         String   @unique
-  name        String
-  description String?
-  createdAt   DateTime @default(now())
+// ============================================================================
+// Consent Management
+// ============================================================================
 
-  userConsents UserConsent[]
+model ConsentCategory {
+  id                String   @id @default(cuid())
+  key               String   @unique
+  name              String
+  description       String?
+  isRequired        Boolean  @default(false) // Cannot be denied (e.g., essential cookies)
+  displayOrder      Int      @default(0)
+  isActive          Boolean  @default(true)
+  region            String?  // GDPR, CCPA, global, etc.
+  legalBasis        String?  // consent, legitimate_interest, contract, etc.
+  dataRetentionDays Int?     // How long data can be kept after consent
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  userConsents     UserConsent[]
+  templateItems    ConsentTemplateItem[]
+  auditLogs        ConsentAuditLog[]
+  withdrawalRequests ConsentWithdrawal[]
 
   @@map("consent_categories")
 }
 
 model UserConsent {
-  id         String   @id @default(cuid())
+  id         String        @id @default(cuid())
   userId     String
   categoryId String
   status     ConsentStatus
-  updatedAt  DateTime @updatedAt
-  createdAt  DateTime @default(now())
+  source     String?       // web, mobile, api, admin, etc.
+  ipAddress  String?
+  userAgent  String?
+  notes      String?
+  expiresAt  DateTime?     // Optional consent expiration
+  updatedAt  DateTime      @updatedAt
+  createdAt  DateTime      @default(now())
 
   user     User            @relation(fields: [userId], references: [id], onDelete: Cascade)
   category ConsentCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
 
   @@unique([userId, categoryId])
+  @@index([userId, status])
+  @@index([categoryId, status])
   @@map("user_consents")
 }
+
+model ConsentAuditLog {
+  id          String        @id @default(cuid())
+  userId      String
+  categoryId  String
+  action      AuditAction   // created, updated, deleted, withdrawn
+  oldStatus   ConsentStatus?
+  newStatus   ConsentStatus?
+  source      String?
+  ipAddress   String?
+  userAgent   String?
+  reason      String?       // Why the change was made
+  triggeredBy String?       // user, admin, system, api
+  metadata    Json?
+  createdAt   DateTime      @default(now())
+
+  user     User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category ConsentCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([categoryId, createdAt])
+  @@index([action])
+  @@map("consent_audit_logs")
+}
+
+model ConsentWithdrawal {
+  id                  String            @id @default(cuid())
+  userId              String
+  categoryId          String
+  status              WithdrawalStatus  @default(pending)
+  requestedAt         DateTime          @default(now())
+  processedAt         DateTime?
+  completedAt         DateTime?
+  gracePeriodEndsAt   DateTime?
+  deletionScheduledAt DateTime?
+  reason              String?
+  notes               String?
+  processedBy         String?           // admin user ID who processed it
+
+  user     User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category ConsentCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@index([status, gracePeriodEndsAt])
+  @@map("consent_withdrawals")
+}
+
+// ============================================================================
+// Consent Templates
+// ============================================================================
+
+model ConsentTemplate {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  name        String
+  description String?
+  region      String?  // GDPR, CCPA, global
+  userType    String?  // standard, enterprise, minor, etc.
+  version     Int      @default(1)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  items       ConsentTemplateItem[]
+  applications TemplateApplication[]
+
+  @@map("consent_templates")
+}
+
+model ConsentTemplateItem {
+  id           String        @id @default(cuid())
+  templateId   String
+  categoryId   String
+  defaultStatus ConsentStatus
+  isRequired   Boolean       @default(false)
+  displayOrder Int           @default(0)
+
+  template ConsentTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  category ConsentCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@unique([templateId, categoryId])
+  @@map("consent_template_items")
+}
+
+model TemplateApplication {
+  id          String   @id @default(cuid())
+  templateId  String
+  groupId     String?  // If applied to a group
+  userId      String?  // If applied to individual user
+  appliedBy   String?  // Admin who applied it
+  appliedAt   DateTime @default(now())
+  metadata    Json?
+
+  template ConsentTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  group    UserGroup?      @relation(fields: [groupId], references: [id], onDelete: SetNull)
+
+  @@index([templateId])
+  @@index([groupId])
+  @@map("template_applications")
+}
+
+// ============================================================================
+// User Groups & Segmentation
+// ============================================================================
+
+model UserGroup {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  name        String
+  description String?
+  groupType   String?  // region, subscription_tier, beta, etc.
+  metadata    Json?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  members              UserGroupMembership[]
+  templateApplications TemplateApplication[]
+
+  @@map("user_groups")
+}
+
+model UserGroupMembership {
+  id        String   @id @default(cuid())
+  userId    String
+  groupId   String
+  addedBy   String?  // Who added the user to this group
+  addedAt   DateTime @default(now())
+  expiresAt DateTime?
+  metadata  Json?
+
+  user  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  group UserGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, groupId])
+  @@index([groupId, userId])
+  @@map("user_group_memberships")
+}
+
+// ============================================================================
+// Notification Preferences
+// ============================================================================
 
 model NotificationPreference {
   id        String              @id @default(cuid())
   userId    String
   channel   NotificationChannel
   frequency Frequency
+  isEnabled Boolean             @default(true)
+  quietHoursStart Int?          // Hour (0-23) when quiet hours start
+  quietHoursEnd   Int?          // Hour (0-23) when quiet hours end
+  timezone  String?             // User's timezone for quiet hours
   metaJson  Json?
   updatedAt DateTime            @updatedAt
   createdAt DateTime            @default(now())
@@ -63,8 +238,71 @@ model NotificationPreference {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, channel])
+  @@index([userId, isEnabled])
   @@map("notification_preferences")
 }
+
+// ============================================================================
+// Events & Integration
+// ============================================================================
+
+model DomainEvent {
+  id          String   @id @default(cuid())
+  eventType   String   // ConsentGranted, ConsentDenied, PreferenceUpdated, etc.
+  aggregateId String   // The entity ID this event relates to (userId, consentId, etc.)
+  payload     Json
+  metadata    Json?    // Request ID, user agent, IP, etc.
+  publishedAt DateTime @default(now())
+  processedAt DateTime?
+  failedAt    DateTime?
+  retryCount  Int      @default(0)
+  error       String?
+
+  @@index([eventType, publishedAt])
+  @@index([aggregateId, eventType])
+  @@index([publishedAt, processedAt])
+  @@map("domain_events")
+}
+
+model WebhookSubscription {
+  id          String   @id @default(cuid())
+  url         String
+  eventTypes  String[] // Which event types to receive
+  secret      String?  // For HMAC signature verification
+  isActive    Boolean  @default(true)
+  retryConfig Json?    // Retry policy configuration
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  deliveries WebhookDelivery[]
+
+  @@map("webhook_subscriptions")
+}
+
+model WebhookDelivery {
+  id             String   @id @default(cuid())
+  subscriptionId String
+  eventId        String
+  url            String
+  payload        Json
+  statusCode     Int?
+  response       String?
+  attemptCount   Int      @default(1)
+  deliveredAt    DateTime @default(now())
+  succeededAt    DateTime?
+  failedAt       DateTime?
+  nextRetryAt    DateTime?
+
+  subscription WebhookSubscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  @@index([subscriptionId, succeededAt])
+  @@index([failedAt, nextRetryAt])
+  @@map("webhook_deliveries")
+}
+
+// ============================================================================
+// Enums
+// ============================================================================
 
 enum ConsentStatus {
   granted
@@ -75,6 +313,8 @@ enum NotificationChannel {
   email
   sms
   push
+  in_app
+  webhook
 }
 
 enum Frequency {
@@ -82,4 +322,22 @@ enum Frequency {
   low
   normal
   high
+  realtime
+}
+
+enum AuditAction {
+  created
+  updated
+  deleted
+  withdrawn
+  expired
+  template_applied
+}
+
+enum WithdrawalStatus {
+  pending
+  processing
+  completed
+  cancelled
+  failed
 }
