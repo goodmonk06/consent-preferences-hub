@@ -1,0 +1,85 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  createdAt DateTime @default(now())
+
+  consents               UserConsent[]
+  notificationPreferences NotificationPreference[]
+
+  @@map("users")
+}
+
+model ConsentCategory {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  name        String
+  description String?
+  createdAt   DateTime @default(now())
+
+  userConsents UserConsent[]
+
+  @@map("consent_categories")
+}
+
+model UserConsent {
+  id         String   @id @default(cuid())
+  userId     String
+  categoryId String
+  status     ConsentStatus
+  updatedAt  DateTime @updatedAt
+  createdAt  DateTime @default(now())
+
+  user     User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category ConsentCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, categoryId])
+  @@map("user_consents")
+}
+
+model NotificationPreference {
+  id        String              @id @default(cuid())
+  userId    String
+  channel   NotificationChannel
+  frequency Frequency
+  metaJson  Json?
+  updatedAt DateTime            @updatedAt
+  createdAt DateTime            @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, channel])
+  @@map("notification_preferences")
+}
+
+enum ConsentStatus {
+  granted
+  denied
+}
+
+enum NotificationChannel {
+  email
+  sms
+  push
+}
+
+enum Frequency {
+  none
+  low
+  normal
+  high
+}
